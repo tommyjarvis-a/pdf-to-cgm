@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230ea5e9'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-family='monospace' font-weight='bold' font-size='13' fill='%2304101d'%3ECGM%3C/text%3E%3C/svg%3E" />
+<title>PDF → CGM CAD Vector Converter (ISO/IEC 8632)</title>
+<style>
+  :root {
+    --bg-0: #0b0f17;
+    --bg-1: #111826;
+    --bg-2: #182235;
+    --bg-3: #202d45;
+    --border: #2a3a57;
+    --border-hi: #3b537d;
+    --text-0: #f0f5fc;
+    --text-1: #b5c4db;
+    --text-2: #7e93b3;
+    --cyan: #22d3ee;
+    --cyan-dim: rgba(34, 211, 238, 0.14);
+    --blue: #3b82f6;
+    --emerald: #10b981;
+    --amber: #f59e0b;
+    --rose: #f43f5e;
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.45;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  /* Top Header */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    background: linear-gradient(180deg, #141d2f 0%, #0f1624 100%);
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brand-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #0ea5e9 0%, #22d3ee 100%);
+    display: grid;
+    place-items: center;
+    color: #06101e;
+    font-weight: 800;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: -0.5px;
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.35);
+  }
+  .brand-title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: var(--text-0);
+  }
+  .brand-sub {
+    font-size: 11px;
+    color: var(--text-2);
+    font-family: var(--mono);
+  }
+  .top-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    color: var(--text-0);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .btn:hover {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, #0284c7 0%, #0ea5e9 50%, #22d3ee 100%);
+    color: #04101d;
+    border-color: #38bdf8;
+    font-weight: 700;
+    box-shadow: 0 2px 12px rgba(14, 165, 233, 0.3);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.08);
+    border-color: #7dd3fc;
+  }
+  .btn-sm {
+    padding: 4px 9px;
+    font-size: 11px;
+  }
+  /* Dropzone + File Bar */
+  .drop-strip {
+    display: grid;
+    grid-template-columns: 1.2fr 2fr;
+    gap: 12px;
+    padding: 12px 18px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+  }
+  @media (max-width: 980px) {
+    .drop-strip { grid-template-columns: 1fr; }
+  }
+  .dropzone {
+    border: 1.5px dashed var(--border-hi);
+    border-radius: 8px;
+    background: rgba(24, 34, 53, 0.55);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--cyan);
+    background: var(--cyan-dim);
+  }
+  .dz-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .dz-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    background: rgba(34, 211, 238, 0.12);
+    border: 1px solid rgba(34, 211, 238, 0.35);
+    color: var(--cyan);
+    display: grid;
+    place-items: center;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .dz-meta {
+    min-width: 0;
+  }
+  .dz-title {
+    font-weight: 600;
+    color: var(--text-0);
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dz-hint {
+    font-size: 11px;
+    color: var(--text-2);
+  }
+  /* Options Grid */
+  .options-bar {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(120px, 1fr));
+    gap: 8px;
+    background: var(--bg-2);
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    align-items: center;
+  }
+  @media (max-width: 1180px) {
+    .options-bar { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 680px) {
+    .options-bar { grid-template-columns: 1fr 1fr; }
+  }
+  .opt-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .opt-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-2);
+    font-weight: 700;
+    font-family: var(--mono);
+  }
+  .opt-control, select, input[type="text"] {
+    background: var(--bg-0);
+    color: var(--text-0);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: var(--sans);
+    outline: none;
+    width: 100%;
+  }
+  select:focus, input[type="text"]:focus {
+    border-color: var(--cyan);
+  }
+  /* Stats & Telemetry Strip */
+  .stats-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 18px;
+    background: #0d1320;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .stat-pills {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-1);
+  }
+  .pill strong {
+    color: var(--text-0);
+    font-weight: 700;
+  }
+  .pill-ok {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #34d399;
+  }
+  .page-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* Side-by-Side Workbenches */
+  .workbench {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px 18px;
+    min-height: 430px;
+  }
+  @media (max-width: 920px) {
+    .workbench { grid-template-columns: 1fr; }
+  }
+  .pane {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 390px;
+  }
+  .pane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+  }
+  .pane-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--text-0);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+  }
+  .dot.cgm {
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+  .pane-tools {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-2);
+  }
+  .canvas-wrap {
+    flex: 1;
+    position: relative;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    overflow: auto;
+    background:
+      linear-gradient(rgba(42, 58, 87, 0.18) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(42, 58, 87, 0.18) 1px, transparent 1px),
+      #090d14;
+    background-size: 20px 20px;
+  }
+  canvas.preview-canvas {
+    max-width: 100%;
+    max-height: 420px;
+    width: auto;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+    border: 1px solid var(--border);
+    background: #ffffff;
+  }
+  .coord-badge {
+    position: absolute;
+    bottom: 8px;
+    right: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(11, 15, 23, 0.86);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-1);
+    pointer-events: none;
+  }
+  /* Bottom Inspector Drawer */
+  .inspector {
+    margin: 0 18px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .inspector-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .tabs {
+    display: flex;
+    gap: 6px;
+  }
+  .tab {
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: var(--mono);
+    color: var(--text-1);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .tab.active {
+    background: var(--bg-0);
+    color: var(--cyan);
+    border-color: var(--border-hi);
+  }
+  .inspector-body {
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-1);
+    max-height: 170px;
+    overflow: auto;
+    white-space: pre;
+    background: #080b11;
+    line-height: 1.5;
+  }
+  .legend-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+  .swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    margin-right: 4px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-badge">CGM</div>
+    <div>
+      <div class="brand-title">PDF to CGM CAD Vector Workbench</div>
+      <div class="brand-sub">ISO/IEC 8632-3 Binary &amp; 8632-4 Clear-Text Metafile Converter · 100% Client-Side</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button class="btn" id="btnLoadSample" title="Load built-in 2-page ASME vector CAD engineering drawing">
+      <span>📐 Load Sample CAD PDF</span>
+    </button>
+    <button class="btn" id="btnDownloadText" title="Download ISO/IEC 8632-4 Clear-Text ASCII CGM">
+      <span>📄 Download Clear-Text (.cgm)</span>
+    </button>
+    <button class="btn btn-primary" id="btnDownloadBinary" title="Download ISO/IEC 8632-3 Binary CGM for Siemens NX / CAD / S1000D">
+      <span>⬇ Download Binary .CGM</span>
+    </button>
+  </div>
+</header>
+
+<section class="drop-strip">
+  <div class="dropzone" id="dropzone">
+    <input type="file" id="fileInput" accept=".pdf,application/pdf" style="display:none" />
+    <div class="dz-left">
+      <div class="dz-icon">PDF</div>
+      <div class="dz-meta">
+        <div class="dz-title" id="fileNameLabel">sample-cad-drawing.pdf (Built-in ASME Flange)</div>
+        <div class="dz-hint" id="fileMetaLabel">Drop a PDF here or click to browse · Vector paths, Beziers, text &amp; raster supported</div>
+      </div>
+    </div>
+    <button class="btn btn-sm" type="button">Browse PDF…</button>
+  </div>
+
+  <div class="options-bar">
+    <div class="opt-group">
+      <label class="opt-label" for="selProfile">CGM Profile / Target</label>
+      <select id="selProfile">
+        <option value="nx_v1" selected>Siemens NX / CAD (Binary v1 Polylines)</option>
+        <option value="webcgm_v3">WebCGM 2.0 / S1000D (Binary v3 Bezier)</option>
+        <option value="cleartext">ISO 8632-4 Clear Text (ASCII)</option>
+      </select>
+    </div>
+
+    <div class="opt-group">
+      <label class="opt-label" for="selMode">Geometry Mode</label>
+      <select id="selMode">
+        <option value="vector" selected>Vector Paths + Text (CAD Native)</option>
+        <option value="hybrid">Hybrid (Vector + Raster Fallback)</option>
+        <option value="raster">Full Page Raster (CELLARRAY Bitmap)</option>
+      </select>
+    </div>
+
+    <div class="opt-group">
+      <label class="opt-label" for="selTextMode">Text Handling</label>
+      <select id="selTextMode">
+        <option value="stroke" selected>Text-to-Path (CAD Vector Outlines)</option>
+        <option value="native">Native CGM TEXT (Editable Font)</option>
+      </select>
+    </div>
+
+    <div class="opt-group">
+      <label class="opt-label" for="selScope">Page Scope</label>
+      <select id="selScope">
+        <option value="current" selected>Current Page Only</option>
+        <option value="all">All Pages (Multi-Picture CGM)</option>
+      </select>
+    </div>
+
+    <div class="opt-group">
+      <label class="opt-label" for="selTolerance">Curve Tolerance / Color</label>
+      <select id="selTolerance">
+        <option value="0.08_color" selected>0.08 mm Fine · Full RGB</option>
+        <option value="0.03_color">0.03 mm Ultra · Full RGB</option>
+        <option value="0.25_color">0.25 mm Fast · Full RGB</option>
+        <option value="0.08_mono">0.08 mm Fine · Monochrome CAD</option>
+      </select>
+    </div>
+  </div>
+</section>
+
+<div class="stats-strip">
+  <div class="stat-pills">
+    <span class="pill pill-ok" id="statusBadge">● ISO 8632 VALIDATED</span>
+    <span class="pill">File Size: <strong id="statBytes">—</strong></span>
+    <span class="pill">Polylines: <strong id="statLines">0</strong></span>
+    <span class="pill">Polygons: <strong id="statPolys">0</strong></span>
+    <span class="pill">Beziers: <strong id="statBeziers">0</strong></span>
+    <span class="pill">Text Runs: <strong id="statTexts">0</strong></span>
+    <span class="pill">Vertices: <strong id="statVerts">0</strong></span>
+    <span class="pill">VDC Extent: <strong id="statExtent">—</strong></span>
+  </div>
+  <div class="page-nav">
+    <button class="btn btn-sm" id="btnPrevPage">◀ Prev</button>
+    <span id="pageIndicator">Page 1 / 2</span>
+    <button class="btn btn-sm" id="btnNextPage">Next ▶</button>
+  </div>
+</div>
+
+<main class="workbench">
+  <section class="pane">
+    <div class="pane-head">
+      <div class="pane-title">
+        <span class="dot"></span>
+        <span>Source PDF Page (PDF.js Reference Render)</span>
+      </div>
+      <div class="pane-tools">
+        <span id="pdfDimLabel">841.9 × 595.3 pt (297.0 × 210.0 mm)</span>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="pdfCanvas" class="preview-canvas" width="842" height="595"></canvas>
+      <div class="coord-badge" id="pdfCoordBadge">Cursor: — mm</div>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="pane-head">
+      <div class="pane-title">
+        <span class="dot cgm"></span>
+        <span>Decoded CGM Output Preview (Live Round-Trip from .CGM Bytes)</span>
+      </div>
+      <div class="pane-tools">
+        <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+          <input type="checkbox" id="chkBlueprint" /> Blueprint Dark
+        </label>
+        <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:8px;">
+          <input type="checkbox" id="chkNodes" /> Show Vertices
+        </label>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="cgmCanvas" class="preview-canvas" width="842" height="595"></canvas>
+      <div class="coord-badge" id="cgmCoordBadge">VDC: —</div>
+    </div>
+  </section>
+</main>
+
+<section class="inspector">
+  <div class="inspector-head">
+    <div class="tabs">
+      <button class="tab active" data-tab="commands" id="tabCommands">ISO 8632 Command Trace (Clear-Text / Decoded)</button>
+      <button class="tab" data-tab="hex" id="tabHex">Binary CGM Hex Dump (ISO 8632-3)</button>
+      <button class="tab" data-tab="summary" id="tabSummary">CAD Import Compatibility Notes</button>
+    </div>
+    <div class="legend-row">
+      <span><i class="swatch" style="background:#38bdf8"></i>POLYLINE</span>
+      <span><i class="swatch" style="background:#a78bfa"></i>POLYGON</span>
+      <span><i class="swatch" style="background:#34d399"></i>POLYBEZIER</span>
+      <span><i class="swatch" style="background:#fbbf24"></i>TEXT / STROKE</span>
+    </div>
+  </div>
+  <pre class="inspector-body" id="inspectorContent">Initializing PDF.js and CGM encoder...</pre>
+</section>
+
+<script src="vendor/pdf.min.js"></script>
+<script>
+window.SAMPLE_PDF_B64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA0IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA4NDEuODkgNTk1LjI4XSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNiAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA4NDEuODkgNTk1LjI4XSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNyAwIFIgPj4KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago2IDAgb2JqCjw8IC9MZW5ndGggNjk5MyA+PgpzdHJlYW0KMC44IHcgMC4xIDAuMTQgMC4yIFJHCjI0IDI0IDc5My44OSA1NDcuMjggcmUgUwoxLjUgdyAzMCAzMCA3ODEuODkgNTM1LjI4IHJlIFMKMC41IHcKMTI3Ljc0IDI0IG0gMTI3Ljc0IDMwIGwgUwoxMjcuNzQgNTY1LjI4IG0gMTI3Ljc0IDU3MS4yOCBsIFMKMjI1LjQ3IDI0IG0gMjI1LjQ3IDMwIGwgUwoyMjUuNDcgNTY1LjI4IG0gMjI1LjQ3IDU3MS4yOCBsIFMKMzIzLjIxIDI0IG0gMzIzLjIxIDMwIGwgUwozMjMuMjEgNTY1LjI4IG0gMzIzLjIxIDU3MS4yOCBsIFMKNDIwLjk0IDI0IG0gNDIwLjk0IDMwIGwgUwo0MjAuOTQgNTY1LjI4IG0gNDIwLjk0IDU3MS4yOCBsIFMKNTE4LjY4IDI0IG0gNTE4LjY4IDMwIGwgUwo1MTguNjggNTY1LjI4IG0gNTE4LjY4IDU3MS4yOCBsIFMKNjE2LjQyIDI0IG0gNjE2LjQyIDMwIGwgUwo2MTYuNDIgNTY1LjI4IG0gNjE2LjQyIDU3MS4yOCBsIFMKNzE0LjE1IDI0IG0gNzE0LjE1IDMwIGwgUwo3MTQuMTUgNTY1LjI4IG0gNzE0LjE1IDU3MS4yOCBsIFMKMjQgMTE5LjIxIG0gMzAgMTE5LjIxIGwgUwo4MTEuODkgMTE5LjIxIG0gODE3Ljg5IDExOS4yMSBsIFMKMjQgMjA4LjQzIG0gMzAgMjA4LjQzIGwgUwo4MTEuODkgMjA4LjQzIG0gODE3Ljg5IDIwOC40MyBsIFMKMjQgMjk3LjY0IG0gMzAgMjk3LjY0IGwgUwo4MTEuODkgMjk3LjY0IG0gODE3Ljg5IDI5Ny42NCBsIFMKMjQgMzg2Ljg1IG0gMzAgMzg2Ljg1IGwgUwo4MTEuODkgMzg2Ljg1IG0gODE3Ljg5IDM4Ni44NSBsIFMKMjQgNDc2LjA3IG0gMzAgNDc2LjA3IGwgUwo4MTEuODkgNDc2LjA3IG0gODE3Ljg5IDQ3Ni4wNyBsIFMKMS4yIHcgNTIwIDMwIDI5MS44OSA5NSByZSBTCjAuNyB3IDUyMCA2MiBtIDgxMS44OSA2MiBsIFMKNTIwIDk0IG0gODExLjg5IDk0IGwgUwo2NTAgMzAgbSA2NTAgOTQgbCBTCjc0MCAzMCBtIDc0MCAxMjUgbCBTCjAuOTMgMC45NiAwLjk5IHJnIDAuMDggMC4yMiAwLjQyIFJHIDEuOCB3CjExMCAyOTUgbSAxNDUgMjQ1IGwgMzE1IDI0NSBsIDM1MCAyOTUgbCAzNTAgMzY1IGwgMzE1IDQxNSBsIDE0NSA0MTUgbCAxMTAgMzY1IGwgaCBCCjEuNiB3IDAuMDUgMC4xOCAwLjM2IFJHCjI5OC4wMCAzMzAuMDAgbQoyOTguMDAgMzY3LjU2IDI2Ny41NiAzOTguMDAgMjMwLjAwIDM5OC4wMCBjCjE5Mi40NCAzOTguMDAgMTYyLjAwIDM2Ny41NiAxNjIuMDAgMzMwLjAwIGMKMTYyLjAwIDI5Mi40NCAxOTIuNDQgMjYyLjAwIDIzMC4wMCAyNjIuMDAgYwoyNjcuNTYgMjYyLjAwIDI5OC4wMCAyOTIuNDQgMjk4LjAwIDMzMC4wMCBjIFMKMSAxIDEgcmcgMi4wIHcgMC4wNSAwLjE4IDAuMzYgUkcKMjcyLjAwIDMzMC4wMCBtCjI3Mi4wMCAzNTMuMjAgMjUzLjIwIDM3Mi4wMCAyMzAuMDAgMzcyLjAwIGMKMjA2LjgwIDM3Mi4wMCAxODguMDAgMzUzLjIwIDE4OC4wMCAzMzAuMDAgYwoxODguMDAgMzA2LjgwIDIwNi44MCAyODguMDAgMjMwLjAwIDI4OC4wMCBjCjI1My4yMCAyODguMDAgMjcyLjAwIDMwNi44MCAyNzIuMDAgMzMwLjAwIGMgQgoxIDEgMSByZyAxLjMgdyAwLjA4IDAuMjIgMC40MiBSRwoxNDkuMDAgMzMwLjAwIG0KMTQ5LjAwIDMzNi4wOCAxNDQuMDggMzQxLjAwIDEzOC4wMCAzNDEuMDAgYwoxMzEuOTIgMzQxLjAwIDEyNy4wMCAzMzYuMDggMTI3LjAwIDMzMC4wMCBjCjEyNy4wMCAzMjMuOTIgMTMxLjkyIDMxOS4wMCAxMzguMDAgMzE5LjAwIGMKMTQ0LjA4IDMxOS4wMCAxNDkuMDAgMzIzLjkyIDE0OS4wMCAzMzAuMDAgYyBCCjAuOCB3IFszIDJdIDAgZAoxNTUuMDAgMzMwLjAwIG0KMTU1LjAwIDMzOS4zOSAxNDcuMzkgMzQ3LjAwIDEzOC4wMCAzNDcuMDAgYwoxMjguNjEgMzQ3LjAwIDEyMS4wMCAzMzkuMzkgMTIxLjAwIDMzMC4wMCBjCjEyMS4wMCAzMjAuNjEgMTI4LjYxIDMxMy4wMCAxMzguMDAgMzEzLjAwIGMKMTQ3LjM5IDMxMy4wMCAxNTUuMDAgMzIwLjYxIDE1NS4wMCAzMzAuMDAgYyBTCltdIDAgZAoxIDEgMSByZyAxLjMgdyAwLjA4IDAuMjIgMC40MiBSRwozMzMuMDAgMzMwLjAwIG0KMzMzLjAwIDMzNi4wOCAzMjguMDggMzQxLjAwIDMyMi4wMCAzNDEuMDAgYwozMTUuOTIgMzQxLjAwIDMxMS4wMCAzMzYuMDggMzExLjAwIDMzMC4wMCBjCjMxMS4wMCAzMjMuOTIgMzE1LjkyIDMxOS4wMCAzMjIuMDAgMzE5LjAwIGMKMzI4LjA4IDMxOS4wMCAzMzMuMDAgMzIzLjkyIDMzMy4wMCAzMzAuMDAgYyBCCjAuOCB3IFszIDJdIDAgZAozMzkuMDAgMzMwLjAwIG0KMzM5LjAwIDMzOS4zOSAzMzEuMzkgMzQ3LjAwIDMyMi4wMCAzNDcuMDAgYwozMTIuNjEgMzQ3LjAwIDMwNS4wMCAzMzkuMzkgMzA1LjAwIDMzMC4wMCBjCjMwNS4wMCAzMjAuNjEgMzEyLjYxIDMxMy4wMCAzMjIuMDAgMzEzLjAwIGMKMzMxLjM5IDMxMy4wMCAzMzkuMDAgMzIwLjYxIDMzOS4wMCAzMzAuMDAgYyBTCltdIDAgZAoxIDEgMSByZyAxLjMgdyAwLjA4IDAuMjIgMC40MiBSRwoyNDEuMDAgMjY4LjAwIG0KMjQxLjAwIDI3NC4wOCAyMzYuMDggMjc5LjAwIDIzMC4wMCAyNzkuMDAgYwoyMjMuOTIgMjc5LjAwIDIxOS4wMCAyNzQuMDggMjE5LjAwIDI2OC4wMCBjCjIxOS4wMCAyNjEuOTIgMjIzLjkyIDI1Ny4wMCAyMzAuMDAgMjU3LjAwIGMKMjM2LjA4IDI1Ny4wMCAyNDEuMDAgMjYxLjkyIDI0MS4wMCAyNjguMDAgYyBCCjAuOCB3IFszIDJdIDAgZAoyNDcuMDAgMjY4LjAwIG0KMjQ3LjAwIDI3Ny4zOSAyMzkuMzkgMjg1LjAwIDIzMC4wMCAyODUuMDAgYwoyMjAuNjEgMjg1LjAwIDIxMy4wMCAyNzcuMzkgMjEzLjAwIDI2OC4wMCBjCjIxMy4wMCAyNTguNjEgMjIwLjYxIDI1MS4wMCAyMzAuMDAgMjUxLjAwIGMKMjM5LjM5IDI1MS4wMCAyNDcuMDAgMjU4LjYxIDI0Ny4wMCAyNjguMDAgYyBTCltdIDAgZAoxIDEgMSByZyAxLjMgdyAwLjA4IDAuMjIgMC40MiBSRwoyNDEuMDAgMzkyLjAwIG0KMjQxLjAwIDM5OC4wOCAyMzYuMDggNDAzLjAwIDIzMC4wMCA0MDMuMDAgYwoyMjMuOTIgNDAzLjAwIDIxOS4wMCAzOTguMDggMjE5LjAwIDM5Mi4wMCBjCjIxOS4wMCAzODUuOTIgMjIzLjkyIDM4MS4wMCAyMzAuMDAgMzgxLjAwIGMKMjM2LjA4IDM4MS4wMCAyNDEuMDAgMzg1LjkyIDI0MS4wMCAzOTIuMDAgYyBCCjAuOCB3IFszIDJdIDAgZAoyNDcuMDAgMzkyLjAwIG0KMjQ3LjAwIDQwMS4zOSAyMzkuMzkgNDA5LjAwIDIzMC4wMCA0MDkuMDAgYwoyMjAuNjEgNDA5LjAwIDIxMy4wMCA0MDEuMzkgMjEzLjAwIDM5Mi4wMCBjCjIxMy4wMCAzODIuNjEgMjIwLjYxIDM3NS4wMCAyMzAuMDAgMzc1LjAwIGMKMjM5LjM5IDM3NS4wMCAyNDcuMDAgMzgyLjYxIDI0Ny4wMCAzOTIuMDAgYyBTCltdIDAgZAowLjYgdyAwLjAgMC41NSAwLjY4IFJHIFsxMiAzIDIgM10gMCBkCjg1IDMzMCBtIDM3NSAzMzAgbCBTCjIzMCAyMjAgbSAyMzAgNDQwIGwgUwoxMTggMzMwIG0gMTU4IDMzMCBsIFMKMzAyIDMzMCBtIDM0MiAzMzAgbCBTCltdIDAgZAoxLjggdyAwLjA1IDAuMTggMC4zNiBSRyAwLjk1IDAuOTcgMS4wIHJnCjUxNSAzNzIgbSA2MTUgMzcyIGwgNjE1IDM5OCBsIDU1MCAzOTggbCA1NTAgNDE1IGwgNTE1IDQxNSBsIGggQgo1MTUgMjQ1IG0gNTUwIDI0NSBsIDU1MCAyNjIgbCA2MTUgMjYyIGwgNjE1IDI4OCBsIDUxNSAyODggbCBoIEIKMS4yIHcKNTE1IDI4OCBtIDUxNSAzNzIgbCBTCjYxNSAyODggbSA2MTUgMzcyIGwgUwowLjU1IHcgMC4yNSAwLjM4IDAuNTUgUkcKNTE1LjAgMzk2LjAgbSA1MTcuMCAzOTguMCBsIFMKNTE1LjAgMjg2LjAgbSA1MTcuMCAyODguMCBsIFMKNTE1LjAgMzg4LjAgbSA1MjUuMCAzOTguMCBsIFMKNTE1LjAgMjc4LjAgbSA1MjUuMCAyODguMCBsIFMKNTE1LjAgMzgwLjAgbSA1MzMuMCAzOTguMCBsIFMKNTE1LjAgMjcwLjAgbSA1MzMuMCAyODguMCBsIFMKNTE1LjAgMzcyLjAgbSA1NDEuMCAzOTguMCBsIFMKNTE1LjAgMjYyLjAgbSA1NDEuMCAyODguMCBsIFMKNTIzLjAgMzcyLjAgbSA1NDkuMCAzOTguMCBsIFMKNTIzLjAgMjYyLjAgbSA1NDkuMCAyODguMCBsIFMKNTMxLjAgMzcyLjAgbSA1NTcuMCAzOTguMCBsIFMKNTMxLjAgMjYyLjAgbSA1NTcuMCAyODguMCBsIFMKNTM5LjAgMzcyLjAgbSA1NjUuMCAzOTguMCBsIFMKNTM5LjAgMjYyLjAgbSA1NjUuMCAyODguMCBsIFMKNTQ3LjAgMzcyLjAgbSA1NzMuMCAzOTguMCBsIFMKNTQ3LjAgMjYyLjAgbSA1NzMuMCAyODguMCBsIFMKNTU1LjAgMzcyLjAgbSA1ODEuMCAzOTguMCBsIFMKNTU1LjAgMjYyLjAgbSA1ODEuMCAyODguMCBsIFMKNTYzLjAgMzcyLjAgbSA1ODkuMCAzOTguMCBsIFMKNTYzLjAgMjYyLjAgbSA1ODkuMCAyODguMCBsIFMKNTcxLjAgMzcyLjAgbSA1OTcuMCAzOTguMCBsIFMKNTcxLjAgMjYyLjAgbSA1OTcuMCAyODguMCBsIFMKNTc5LjAgMzcyLjAgbSA2MDUuMCAzOTguMCBsIFMKNTc5LjAgMjYyLjAgbSA2MDUuMCAyODguMCBsIFMKNTg3LjAgMzcyLjAgbSA2MTMuMCAzOTguMCBsIFMKNTg3LjAgMjYyLjAgbSA2MTMuMCAyODguMCBsIFMKNTk1LjAgMzcyLjAgbSA2MTUuMCAzOTguMCBsIFMKNTk1LjAgMjYyLjAgbSA2MTUuMCAyODguMCBsIFMKNjAzLjAgMzcyLjAgbSA2MTUuMCAzOTguMCBsIFMKNjAzLjAgMjYyLjAgbSA2MTUuMCAyODguMCBsIFMKNjExLjAgMzcyLjAgbSA2MTUuMCAzOTguMCBsIFMKNjExLjAgMjYyLjAgbSA2MTUuMCAyODguMCBsIFMKMC42IHcgMC4wIDAuNTUgMC42OCBSRyBbMTIgMyAyIDNdIDAgZAo0OTUgMzMwIG0gNjM1IDMzMCBsIFMKW10gMCBkCjAuNzUgdyAwLjc4IDAuMTggMC4xOCBSRyAwLjc4IDAuMTggMC4xOCByZwoxMTAgNDE1IG0gMTEwIDQ2MSBsIFMKMzUwIDQxNSBtIDM1MCA0NjEgbCBTCjExMCA0NTUgbSAzNTAgNDU1IGwgUwoxMTAgNDU1IG0gMTE3IDQ1Ny41IGwgMTE3IDQ1Mi41IGwgaCBmCjM1MCA0NTUgbSAzNDMgNDU3LjUgbCAzNDMgNDUyLjUgbCBoIGYKNTE1IDM5OCBtIDUxNSA0NTEgbCBTCjYxNSAzOTggbSA2MTUgNDUxIGwgUwo1MTUgNDQ1IG0gNjE1IDQ0NSBsIFMKNTE1IDQ0NSBtIDUyMiA0NDcuNSBsIDUyMiA0NDIuNSBsIGggZgo2MTUgNDQ1IG0gNjA4IDQ0Ny41IGwgNjA4IDQ0Mi41IGwgaCBmCjAuOCB3IDAuMSAwLjE0IDAuMiBSRwoxNDAgMTY1IDE4MCAyMiByZSBTCjE2NSAxNjUgbSAxNjUgMTg3IGwgUwoyNDUgMTY1IG0gMjQ1IDE4NyBsIFMKMjg1IDE2NSBtIDI4NSAxODcgbCBTCjE1OC41MCAxNzYuMDAgbQoxNTguNTAgMTc5LjMxIDE1NS44MSAxODIuMDAgMTUyLjUwIDE4Mi4wMCBjCjE0OS4xOSAxODIuMDAgMTQ2LjUwIDE3OS4zMSAxNDYuNTAgMTc2LjAwIGMKMTQ2LjUwIDE3Mi42OSAxNDkuMTkgMTcwLjAwIDE1Mi41MCAxNzAuMDAgYwoxNTUuODEgMTcwLjAwIDE1OC41MCAxNzIuNjkgMTU4LjUwIDE3Ni4wMCBjIFMKMTQ0IDE3NiBtIDE2MSAxNzYgbCBTIDE1Mi41IDE2Ny41IG0gMTUyLjUgMTg0LjUgbCBTCkJUIDAuNzggMC4xOCAwLjE4IHJnIC9GMSAxMCBUZiAyMDAuMDAgNDYxLjAwIFRkICgyNDAuMDAgKy8tIDAuMTUgbW0pIFRqIEVUCkJUIDAuNzggMC4xOCAwLjE4IHJnIC9GMSAxMCBUZiA1MzguMDAgNDUxLjAwIFRkICgxMDAuMDAgbW0pIFRqIEVUCkJUIDAuMDggMC4yMiAwLjQyIHJnIC9GMSAxMSBUZiAxOTIuMDAgMjA1LjAwIFRkIChGUk9OVCBWSUVXIFwoU0NBTEUgMToxXCkpIFRqIEVUCkJUIDAuMDggMC4yMiAwLjQyIHJnIC9GMSAxMSBUZiA1MTguMDAgMjA1LjAwIFRkIChTRUNUSU9OIEEtQSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDEwIFRmIDE3Mi4wMCAxNzIuMDAgVGQgKFBPUyAwLjA1IE0pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSAxMCBUZiAyNTguMDAgMTcyLjAwIFRkIChBKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgMTAgVGYgMjk4LjAwIDE3Mi4wMCBUZCAoQikgVGogRVQKQlQgMC4wOCAwLjIyIDAuNDIgcmcgL0YxIDEwIFRmIDQ4LjAwIDExNS4wMCBUZCAoRU5HSU5FRVJJTkcgTk9URVMgXChBU01FIFkxNC41LTIwMThcKTopIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA4LjUgVGYgNDguMDAgOTkuMDAgVGQgKDEuIE1BVEVSSUFMOiBBTCA2MDYxLVQ2IEJJTExFVCwgQU5PRElaRSBNSUwtQS04NjI1IFRZUEUgSUkuKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOC41IFRmIDQ4LjAwIDg1LjAwIFRkICgyLiBCUkVBSyBBTEwgU0hBUlAgRURHRVMgMC41MCBYIDQ1IERFRyBNQVggVU5MRVNTIFNQRUNJRklFRC4pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA4LjUgVGYgNDguMDAgNzEuMDAgVGQgKDMuIEJPUkUgRElBIDg0LjAwIEg3IFwoKzAuMDM1IC8gLTAuMDAwXCkgQ09OQ0VOVFJJQyBUTyBEQVRVTSBBLikgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDguNSBUZiA0OC4wMCA1Ny4wMCBUZCAoNC4gRVhQT1JUIFRBUkdFVDogSVNPL0lFQyA4NjMyIENHTSBCSU5BUlkgLyBTMTAwMEQgLyBTSUVNRU5TIE5YLikgVGogRVQKQlQgMC4wNSAwLjE4IDAuMzYgcmcgL0YxIDExIFRmIDUzMC4wMCAxMDQuMDAgVGQgKEZMQU5HRUQgQkVBUklORyBIT1VTSU5HIC0gUkVWIEMpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5IFRmIDUzMC4wMCA3NC4wMCBUZCAoUEFSVCBOTzogTlgtNDAyMC1DR00pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5IFRmIDY2MC4wMCA3NC4wMCBUZCAoVU5JVFM6IE1JTExJTUVURVJTKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOSBUZiA3NDguMDAgMTA0LjAwIFRkIChTSEVFVCAxIE9GIDIpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5IFRmIDc0OC4wMCA3NC4wMCBUZCAoU0NBTEU6IDE6MSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDguNSBUZiA1MzAuMDAgNDIuMDAgVGQgKENBRCBFWENIQU5HRTogSVNPIDg2MzItMyBCSU5BUlkgQ0dNKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOC41IFRmIDY2MC4wMCA0Mi4wMCBUZCAoVE9MOiBJU08gMjc2OC1tSykgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDguNSBUZiA3NDguMDAgNDIuMDAgVGQgKFNJWkU6IEE0LUwpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNyAwIG9iago8PCAvTGVuZ3RoIDIzMzAgPj4Kc3RyZWFtCjAuOCB3IDAuMSAwLjE0IDAuMiBSRyAyNCAyNCA3OTMuODkgNTQ3LjI4IHJlIFMKMS41IHcgMzAgMzAgNzgxLjg5IDUzNS4yOCByZSBTCjEuMiB3IDAuMDggMC4yMiAwLjQyIFJHIDYwIDIyMCAzNDAgMjgwIHJlIFMKMC41IHcgMC43NSAwLjgyIDAuOTAgUkcKNjAgMjY2LjcgbSA0MDAgMjY2LjcgbCBTCjYwIDMxMy4zIG0gNDAwIDMxMy4zIGwgUwo2MCAzNjAuMCBtIDQwMCAzNjAuMCBsIFMKNjAgNDA2LjcgbSA0MDAgNDA2LjcgbCBTCjYwIDQ1My4zIG0gNDAwIDQ1My4zIGwgUwoxMTYuNyAyMjAgbSAxMTYuNyA1MDAgbCBTCjE3My4zIDIyMCBtIDE3My4zIDUwMCBsIFMKMjMwLjAgMjIwIG0gMjMwLjAgNTAwIGwgUwoyODYuNyAyMjAgbSAyODYuNyA1MDAgbCBTCjM0My4zIDIyMCBtIDM0My4zIDUwMCBsIFMKMi4wIHcgMC4wIDAuNTUgMC42OCBSRwo2MCAyMzUgbSAxMTUgMjkwIGwgMTcwIDM1NSBsIDIyNSA0MDUgbCAyODAgNDQyIGwgMzM1IDQ2OCBsIDQwMCA0ODUgbCBTCjEuMiB3IDAuMSAwLjE0IDAuMiBSRyA0NDAgMjYwIDM0MCAyNDAgcmUgUwowLjcgdyA0NDAgMzAwIG0gNzgwIDMwMCBsIFMKMC43IHcgNDQwIDM0MCBtIDc4MCAzNDAgbCBTCjAuNyB3IDQ0MCAzODAgbSA3ODAgMzgwIGwgUwowLjcgdyA0NDAgNDIwIG0gNzgwIDQyMCBsIFMKMC43IHcgNDQwIDQ2MCBtIDc4MCA0NjAgbCBTCjU0MCAyNjAgbSA1NDAgNTAwIGwgUyA2NzAgMjYwIG0gNjcwIDUwMCBsIFMKQlQgMC4wNSAwLjE4IDAuMzYgcmcgL0YxIDExIFRmIDYwLjAwIDUxNS4wMCBUZCAoUFJFTE9BRCBUT1JRVUUgVlMgQ0xBTVAgTE9BRCBDVVJWRSkgVGogRVQKQlQgMC4wNSAwLjE4IDAuMzYgcmcgL0YxIDExIFRmIDQ0MC4wMCA1MTUuMDAgVGQgKElOU1BFQ1RJT04gJiBGSVQgU0NIRURVTEUpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNDUyLjAwIDQ3NC4wMCBUZCAoRkVBVFVSRSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDkuNSBUZiA1NTIuMDAgNDc0LjAwIFRkIChOT01JTkFMKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDY4Mi4wMCA0NzQuMDAgVGQgKFRPTEVSQU5DRSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDkuNSBUZiA0NTIuMDAgNDM0LjAwIFRkIChNQUlOIEJPUkUpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNTUyLjAwIDQzNC4wMCBUZCAoODQuMDAgbW0pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNjgyLjAwIDQzNC4wMCBUZCAoKzAuMDM1IC8gLTAuMDAwKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDQ1Mi4wMCAzOTQuMDAgVGQgKFBJTE9UIE9EKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDU1Mi4wMCAzOTQuMDAgVGQgKDEzNi4wMCBtbSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDkuNSBUZiA2ODIuMDAgMzk0LjAwIFRkICgrMC4wMDAgLyAtMC4wNDApIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNDUyLjAwIDM1NC4wMCBUZCAoQk9MVCBDSVJDTEUpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNTUyLjAwIDM1NC4wMCBUZCAoMTg0LjAwIG1tKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDY4Mi4wMCAzNTQuMDAgVGQgKFBPUyAwLjA1IE0pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNDUyLjAwIDMxNC4wMCBUZCAoTU9VTlQgSE9MRVMpIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNTUyLjAwIDMxNC4wMCBUZCAoNFggMjIuMDAgbW0pIFRqIEVUCkJUIDAuMTAgMC4xNCAwLjIwIHJnIC9GMSA5LjUgVGYgNjgyLjAwIDMxNC4wMCBUZCAoKzAuMTUgLyAtMC4wMCkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDkuNSBUZiA0NTIuMDAgMjc0LjAwIFRkIChGTEFOR0UgVEhLKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDU1Mi4wMCAyNzQuMDAgVGQgKDE3LjAwIG1tKSBUaiBFVApCVCAwLjEwIDAuMTQgMC4yMCByZyAvRjEgOS41IFRmIDY4Mi4wMCAyNzQuMDAgVGQgKCsvLSAwLjEwIG1tKSBUaiBFVAoxLjIgdyA1MjAgMzAgMjkxLjg5IDY0IHJlIFMKQlQgMC4wNSAwLjE4IDAuMzYgcmcgL0YxIDEwIFRmIDUzMi4wMCA3MC4wMCBUZCAoRkxBTkdFRCBCRUFSSU5HIEhPVVNJTkcgLSBTQ0hFRFVMRSkgVGogRVQKQlQgMC4xMCAwLjE0IDAuMjAgcmcgL0YxIDkgVGYgNTMyLjAwIDQ1LjAwIFRkIChQQVJUIE5POiBOWC00MDIwLUNHTSAgIHwgICBTSEVFVCAyIE9GIDIpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDgKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNjQgMDAwMDAgbiAKMDAwMDAwMDEyNyAwMDAwMCBuIAowMDAwMDAwMjU5IDAwMDAwIG4gCjAwMDAwMDAzOTEgMDAwMDAgbiAKMDAwMDAwMDQ2MSAwMDAwMCBuIAowMDAwMDA3NTA2IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgOCAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKOTg4OAolJUVPRgo=";
+</script>
+<script src="app.js"></script>
+</body>
+</html>
