@@ -484,8 +484,10 @@
     <div class="opt-group">
       <label class="opt-label" for="selTextMode">Text Handling</label>
       <select id="selTextMode">
-        <option value="stroke" selected>Text-to-Path (CAD Vector Outlines)</option>
-        <option value="native">Native CGM TEXT (Editable Font)</option>
+        <option value="auto" selected>Auto (Skip Duplicate if Vectorized)</option>
+        <option value="none">Vector Paths Only (Ignore Text Layer)</option>
+        <option value="stroke">Force Stroke Text (1:1 Source Size)</option>
+        <option value="native">Native CGM TEXT (1:1 Source Size)</option>
       </select>
     </div>
 

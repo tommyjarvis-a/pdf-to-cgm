@@ -58,34 +58,55 @@
     "=": [[[2,6.5],[8,6.5]],[[2,3.5],[8,3.5]]]
   };
 
-  function textToStrokePolylines(str, x, y, fontSizePt, colorRgb) {
+  function textToStrokePolylines(str, x, y, fontSizePt, colorRgb, targetWidthPt, angleRad) {
     const out = [];
-    const scale = Math.max(2, fontSizePt) / 10.0;
-    const adv = 7.4 * scale;
-    let curX = x;
+    const capHeightPt = Math.max(0.5, fontSizePt * 0.70);
+    const baseScale = capHeightPt / 10.0;
+    const baseAdv = 7.2 * baseScale;
+
+    let naturalWidth = 0;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === " ") naturalWidth += baseAdv * 0.65;
+      else if (ch >= "a" && ch <= "z") naturalWidth += baseAdv * 0.85;
+      else naturalWidth += baseAdv;
+    }
+
+    const widthRatio = (targetWidthPt && targetWidthPt > 0 && naturalWidth > 0)
+      ? Math.max(0.45, Math.min(1.35, targetWidthPt / naturalWidth))
+      : 1.0;
+
+    const cosA = Math.cos(angleRad || 0);
+    const sinA = Math.sin(angleRad || 0);
+    let localX = 0;
+
     for (let i = 0; i < str.length; i++) {
       const ch = str[i];
       if (ch === " ") {
-        curX += adv * 0.75;
+        localX += baseAdv * 0.65 * widthRatio;
         continue;
       }
       const upper = ch.toUpperCase();
       const isLower = ch >= "a" && ch <= "z";
       const glyph = STROKE_GLYPHS[upper] || STROKE_GLYPHS["-"];
-      const sx = scale * (isLower ? 0.82 : 0.78);
-      const sy = scale * (isLower ? 0.72 : 1.0);
+      const sx = baseScale * (isLower ? 0.56 : 0.62) * widthRatio;
+      const sy = baseScale * (isLower ? 0.72 : 1.0);
       for (const stroke of glyph) {
-        const pts = stroke.map(([gx, gy]) => [curX + gx * sx, y + gy * sy]);
+        const pts = stroke.map(([gx, gy]) => {
+          const lx = localX + gx * sx;
+          const ly = gy * sy;
+          return [x + lx * cosA - ly * sinA, y + lx * sinA + ly * cosA];
+        });
         out.push({
           type: "polyline",
           points: pts,
           color: colorRgb,
-          lineWidth: Math.max(0.45, fontSizePt * 0.085),
+          lineWidth: Math.max(0.25, capHeightPt * 0.09),
           dashType: 1,
           isTextStroke: true
         });
       }
-      curX += adv * (isLower ? 0.86 : 1.0);
+      localX += baseAdv * (isLower ? 0.85 : 1.0) * widthRatio;
     }
     return out;
   }
@@ -203,16 +224,21 @@
       return { widthPt, heightPt, widthMm, heightMm, primitives };
     }
 
+    const T = vp.transform || [1, 0, 0, -1, 0, heightPt];
+    const baseCtm = [T[0], -T[1], T[2], -T[3], T[4], heightPt - T[5]];
+
     const opList = await page.getOperatorList();
     let state = {
-      ctm: [1, 0, 0, 1, 0, 0],
+      ctm: baseCtm.slice(),
       strokeColor: [20, 35, 60],
       fillColor: [235, 242, 250],
       lineWidth: 1.0,
-      dash: []
+      dash: [],
+      textRenderingMode: 0
     };
     const stack = [];
     let pendingSubpaths = [];
+    let hasInvisibleTextOp = false;
 
     for (let i = 0; i < opList.fnArray.length; i++) {
       const fn = opList.fnArray[i];
@@ -224,10 +250,28 @@
           strokeColor: state.strokeColor.slice(),
           fillColor: state.fillColor.slice(),
           lineWidth: state.lineWidth,
-          dash: state.dash.slice()
+          dash: state.dash.slice(),
+          textRenderingMode: state.textRenderingMode
         });
       } else if (fn === OPS.restore) {
         if (stack.length) state = stack.pop();
+      } else if (fn === OPS.paintFormXObjectBegin) {
+        stack.push({
+          ctm: state.ctm.slice(),
+          strokeColor: state.strokeColor.slice(),
+          fillColor: state.fillColor.slice(),
+          lineWidth: state.lineWidth,
+          dash: state.dash.slice(),
+          textRenderingMode: state.textRenderingMode
+        });
+        if (args && Array.isArray(args[0]) && args[0].length === 6) {
+          state.ctm = multiplyMatrix(state.ctm, args[0]);
+        }
+      } else if (fn === OPS.paintFormXObjectEnd) {
+        if (stack.length) state = stack.pop();
+      } else if (fn === OPS.setTextRenderingMode) {
+        state.textRenderingMode = Number(args && args[0]) || 0;
+        if (state.textRenderingMode === 3) hasInvisibleTextOp = true;
       } else if (fn === OPS.transform) {
         state.ctm = multiplyMatrix(state.ctm, args);
       } else if (fn === OPS.setLineWidth) {
@@ -380,45 +424,163 @@
       }
     }
 
-    // Extract Text Content
-    const tc = await page.getTextContent();
-    let textRunCount = 0;
-    for (const item of tc.items) {
-      const str = (item.str || "").trim();
-      if (!str) continue;
-      textRunCount++;
-      const tr = item.transform || [10, 0, 0, 10, 0, 0];
-      const fontSize = Math.max(4, Math.hypot(tr[0], tr[1]) || item.height || 9);
-      const tx = tr[4];
-      const ty = tr[5];
-      const textColor = options.monochrome ? [20, 28, 42] : [20, 42, 78];
-
-      if (options.textMode === "stroke") {
-        const strokes = textToStrokePolylines(str, tx, ty, fontSize, textColor);
-        for (const s of strokes) primitives.push(s);
-      } else {
-        primitives.push({
-          type: "text",
-          str,
-          x: tx,
-          y: ty,
-          fontSize,
-          color: textColor
-        });
+    const glyphBoxes = [];
+    for (const p of primitives) {
+      if (!p.points || p.points.length < 2) continue;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const pt of p.points) {
+        if (pt[0] < x0) x0 = pt[0];
+        if (pt[0] > x1) x1 = pt[0];
+        if (pt[1] < y0) y0 = pt[1];
+        if (pt[1] > y1) y1 = pt[1];
+      }
+      const bw = x1 - x0, bh = y1 - y0;
+      if (bw <= 120 && bh <= 60 && (bw > 0.1 || bh > 0.1)) {
+        glyphBoxes.push([x0, y0, x1, y1]);
       }
     }
 
-    return { widthPt, heightPt, widthMm, heightMm, primitives, textRunCount };
+    function hasVectorizedGlyphsInBox(bx0, by0, bx1, by1, refH) {
+      let hits = 0;
+      const maxGlyphH = Math.max(18, refH * 2.4);
+      for (let i = 0; i < glyphBoxes.length; i++) {
+        const g = glyphBoxes[i];
+        if (g[2] < bx0 || g[0] > bx1 || g[3] < by0 || g[1] > by1) continue;
+        if ((g[3] - g[1]) <= maxGlyphH) {
+          hits++;
+          if (hits >= 2) return true;
+        }
+      }
+      return false;
+    }
+
+    let textRunCount = 0;
+    if (options.textMode !== "none") {
+      const tc = await page.getTextContent();
+      for (const item of tc.items) {
+        const str = (item.str || "").trim();
+        if (!str) continue;
+        const rawTr = item.transform || [10, 0, 0, 10, 0, 0];
+        const tr = multiplyMatrix(baseCtm, rawTr);
+        const fontSize = Math.hypot(tr[2], tr[3]) || Math.hypot(tr[0], tr[1]) || item.height || 9;
+        const angleRad = Math.atan2(tr[1], tr[0]);
+        const tx = tr[4];
+        const ty = tr[5];
+        const ctmScale = Math.hypot(baseCtm[0], baseCtm[1]) || 1.0;
+        const runWidth = (item.width ? item.width * ctmScale : fontSize * str.length * 0.52);
+        const capH = fontSize * 0.70;
+
+        if (options.textMode === "auto") {
+          if (hasInvisibleTextOp) continue;
+          const cosA = Math.cos(angleRad), sinA = Math.sin(angleRad);
+          const ex = tx + runWidth * cosA - capH * sinA;
+          const ey = ty + runWidth * sinA + capH * cosA;
+          const bx0 = Math.min(tx, ex) - 1.5;
+          const by0 = Math.min(ty, ey) - 1.5;
+          const bx1 = Math.max(tx, ex) + 1.5;
+          const by1 = Math.max(ty, ey) + Math.max(capH, 2.0) + 1.5;
+          if (hasVectorizedGlyphsInBox(bx0, by0, bx1, by1, fontSize)) {
+            continue;
+          }
+        }
+
+        textRunCount++;
+        const textColor = options.monochrome ? [20, 28, 42] : [20, 42, 78];
+
+        if (options.textMode === "native") {
+          primitives.push({
+            type: "text",
+            str,
+            x: tx,
+            y: ty,
+            fontSize,
+            widthPt: runWidth,
+            color: textColor
+          });
+        } else {
+          const strokes = textToStrokePolylines(str, tx, ty, fontSize, textColor, runWidth, angleRad);
+          for (const s of strokes) primitives.push(s);
+        }
+      }
+    }
+
+    let minX = 0, minY = 0, maxX = widthPt, maxY = heightPt;
+    for (const p of primitives) {
+      if (p.points) {
+        for (const pt of p.points) {
+          if (pt[0] < minX) minX = pt[0];
+          if (pt[0] > maxX) maxX = pt[0];
+          if (pt[1] < minY) minY = pt[1];
+          if (pt[1] > maxY) maxY = pt[1];
+        }
+      }
+      if (p.beziers) {
+        for (const seg of p.beziers) {
+          for (const pt of seg) {
+            if (pt[0] < minX) minX = pt[0];
+            if (pt[0] > maxX) maxX = pt[0];
+            if (pt[1] < minY) minY = pt[1];
+            if (pt[1] > maxY) maxY = pt[1];
+          }
+        }
+      }
+      if (p.type === "text") {
+        if (p.x < minX) minX = p.x;
+        if (p.x + (p.widthPt || 0) > maxX) maxX = p.x + (p.widthPt || 0);
+        if (p.y < minY) minY = p.y;
+        if (p.y + p.fontSize > maxY) maxY = p.y + p.fontSize;
+      }
+    }
+
+    const padPt = (minX < -0.5 || minY < -0.5 || maxX > widthPt + 0.5 || maxY > heightPt + 0.5) ? 6.0 : 0.0;
+    const extMinX = (minX < -0.5) ? (minX - padPt) : 0;
+    const extMinY = (minY < -0.5) ? (minY - padPt) : 0;
+    const extMaxX = (maxX > widthPt + 0.5) ? (maxX + padPt) : widthPt;
+    const extMaxY = (maxY > heightPt + 0.5) ? (maxY + padPt) : heightPt;
+
+    if (extMinX !== 0 || extMinY !== 0) {
+      const dx = -extMinX, dy = -extMinY;
+      for (const p of primitives) {
+        if (p.points) {
+          for (const pt of p.points) { pt[0] += dx; pt[1] += dy; }
+        }
+        if (p.beziers) {
+          for (const seg of p.beziers) {
+            for (const pt of seg) { pt[0] += dx; pt[1] += dy; }
+          }
+        }
+        if (p.type === "text") {
+          p.x += dx;
+          p.y += dy;
+        }
+      }
+    }
+
+    const finalWidthPt = Math.max(1, extMaxX - extMinX);
+    const finalHeightPt = Math.max(1, extMaxY - extMinY);
+    const finalWidthMm = finalWidthPt * (25.4 / 72.0);
+    const finalHeightMm = finalHeightPt * (25.4 / 72.0);
+    const scaleVdcPerPt = Math.min(10, 32000 / Math.max(1, finalWidthPt, finalHeightPt));
+
+    return {
+      widthPt: finalWidthPt,
+      heightPt: finalHeightPt,
+      widthMm: finalWidthMm,
+      heightMm: finalHeightMm,
+      scaleVdcPerPt,
+      primitives,
+      textRunCount
+    };
   }
 
   // --- ISO/IEC 8632-3 Binary CGM Encoder ---
   function encodeBinaryCGM(scenes, options) {
     const chunks = [];
     const trace = [];
-    const scaleVdcPerPt = 10; // 10 VDC units per PDF point (~0.0353 mm precision, fits 16-bit signed int up to 3276 pt)
+    let scaleVdcPerPt = 10;
 
     function toVdc(pt) {
-      return Math.max(-32760, Math.min(32760, Math.round(pt * scaleVdcPerPt)));
+      return Math.max(-32767, Math.min(32767, Math.round(pt * scaleVdcPerPt)));
     }
 
     function emitCommand(cls, id, paramBytes, traceLine) {
@@ -493,6 +655,7 @@
     let stats = { polylines: 0, polygons: 0, beziers: 0, texts: 0, vertices: 0 };
 
     scenes.forEach((scene, idx) => {
+      scaleVdcPerPt = scene.scaleVdcPerPt || Math.min(10, 32000 / Math.max(1, scene.widthPt, scene.heightPt));
       const picName = `PAGE_${idx + 1}`;
       const vdcW = toVdc(scene.widthPt);
       const vdcH = toVdc(scene.heightPt);
@@ -588,7 +751,7 @@
           // TEXT COLOR (Class 5, ID 14)
           emitCommand(5, 14, new Uint8Array(p.color), `  TEXTCOLR ${p.color.join(" ")};`);
           // CHARACTER HEIGHT (Class 5, ID 15)
-          const ch = Math.max(10, toVdc(p.fontSize * 0.85));
+          const ch = Math.max(1, toVdc(p.fontSize * 0.70));
           emitCommand(5, 15, i16Bytes([ch]), `  CHARHEIGHT ${ch};`);
           // TEXT (Class 4, ID 4): point(x,y) + enum(1=final) + string
           const sb = strBytes(p.str);
@@ -636,8 +799,8 @@
 
   // --- ISO/IEC 8632-4 Clear Text CGM Encoder ---
   function encodeClearTextCGM(scenes, options) {
-    const scaleVdcPerPt = 10;
-    const toVdc = (pt) => Math.round(pt * scaleVdcPerPt);
+    let scaleVdcPerPt = 10;
+    const toVdc = (pt) => Math.max(-32767, Math.min(32767, Math.round(pt * scaleVdcPerPt)));
     const lines = [];
     const mfVer = options.profile === "webcgm_v3" ? 3 : 1;
 
@@ -652,6 +815,7 @@
     lines.push(`  FONTLIST 'Helvetica';`);
 
     scenes.forEach((scene, idx) => {
+      scaleVdcPerPt = scene.scaleVdcPerPt || Math.min(10, 32000 / Math.max(1, scene.widthPt, scene.heightPt));
       const vdcW = toVdc(scene.widthPt);
       const vdcH = toVdc(scene.heightPt);
       lines.push(`BEGPIC 'PAGE_${idx + 1}';`);
@@ -693,7 +857,7 @@
           lines.push(`  POLYBEZIER 2 ${pts.join(" ")};`);
         } else if (p.type === "text") {
           lines.push(`  TEXTCOLR ${p.color.join(" ")};`);
-          lines.push(`  CHARHEIGHT ${Math.max(10, toVdc(p.fontSize * 0.85))};`);
+          lines.push(`  CHARHEIGHT ${Math.max(1, toVdc(p.fontSize * 0.70))};`);
           const safe = p.str.replace(/'/g, "''");
           lines.push(`  TEXT (${toVdc(p.x)},${toVdc(p.y)}) FINAL '${safe}';`);
         }
@@ -985,7 +1149,7 @@
       } else if (el.type === "text") {
         ctx.setLineDash([]);
         const pt = mapPt([el.x, el.y]);
-        const pxSize = Math.max(7, el.charHeight * sy * 1.12);
+        const pxSize = Math.max(4, el.charHeight * sy);
         ctx.font = `600 ${pxSize.toFixed(1)}px "Inter", Helvetica, Arial, sans-serif`;
         ctx.fillStyle = cssColor(el.color, false);
         ctx.fillText(el.str, pt[0], pt[1]);
@@ -1103,7 +1267,9 @@
     if (!state.pdfDoc) return;
     const opts = getOptions();
     const page = await state.pdfDoc.getPage(state.currentPage);
-    const vp = page.getViewport({ scale: 1.5 });
+    const vp1 = page.getViewport({ scale: 1.0 });
+    const renderScale = Math.min(1.75, Math.max(0.35, 1400 / Math.max(1, vp1.width, vp1.height)));
+    const vp = page.getViewport({ scale: renderScale });
     els.pdfCanvas.width = Math.round(vp.width);
     els.pdfCanvas.height = Math.round(vp.height);
     els.cgmCanvas.width = Math.round(vp.width);
@@ -1156,7 +1322,8 @@
     els.statBeziers.textContent = binResult.stats.beziers.toLocaleString();
     els.statTexts.textContent = binResult.stats.texts.toLocaleString();
     els.statVerts.textContent = binResult.stats.vertices.toLocaleString();
-    els.statExtent.textContent = `${Math.round(sc.widthPt * 10)} × ${Math.round(sc.heightPt * 10)} VDC`;
+    const vScale = sc.scaleVdcPerPt || 10;
+    els.statExtent.textContent = `${Math.round(sc.widthPt * vScale)} × ${Math.round(sc.heightPt * vScale)} VDC`;
     els.pageIndicator.textContent = `Page ${state.currentPage} / ${state.numPages}`;
     els.btnPrevPage.disabled = state.currentPage <= 1;
     els.btnNextPage.disabled = state.currentPage >= state.numPages;
@@ -1295,8 +1462,9 @@
       const rx = (e.clientX - rect.left) / Math.max(1, rect.width);
       const ry = 1.0 - (e.clientY - rect.top) / Math.max(1, rect.height);
       if (isVdc) {
-        const vx = Math.round(rx * state.lastScene.widthPt * 10);
-        const vy = Math.round(ry * state.lastScene.heightPt * 10);
+        const vScale = state.lastScene.scaleVdcPerPt || 10;
+        const vx = Math.round(rx * state.lastScene.widthPt * vScale);
+        const vy = Math.round(ry * state.lastScene.heightPt * vScale);
         badge.textContent = `VDC: (${vx}, ${vy})`;
       } else {
         const mx = (rx * state.lastScene.widthMm).toFixed(1);
