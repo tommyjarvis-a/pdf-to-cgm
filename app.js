@@ -593,16 +593,36 @@
 
     const finalWidthPt = Math.max(1, extMaxX - extMinX);
     const finalHeightPt = Math.max(1, extMaxY - extMinY);
-    const finalWidthMm = finalWidthPt * (25.4 / 72.0);
-    const finalHeightMm = finalHeightPt * (25.4 / 72.0);
-    const scaleVdcPerPt = Math.min(10, 32000 / Math.max(1, finalWidthPt, finalHeightPt));
+    const aspect = finalHeightPt / finalWidthPt;
+    const targetWidthPx = (options && options.targetWidthPx > 0) ? options.targetWidthPx : 0;
+    const targetHeightPx = targetWidthPx > 0 ? (targetWidthPx * aspect) : 0;
+
+    let scaleVdcPerPt;
+    let finalWidthMm, finalHeightMm;
+    if (targetWidthPx > 0) {
+      const maxTarget = Math.max(targetWidthPx, targetHeightPx);
+      const clampedWidthPx = maxTarget > 32000 ? (targetWidthPx * (32000 / maxTarget)) : targetWidthPx;
+      scaleVdcPerPt = clampedWidthPx / finalWidthPt;
+      const scaleRatio = targetWidthPx / finalWidthPt;
+      finalWidthMm = finalWidthPt * (25.4 / 72.0) * scaleRatio;
+      finalHeightMm = finalHeightPt * (25.4 / 72.0) * scaleRatio;
+    } else {
+      scaleVdcPerPt = Math.min(10, 32000 / Math.max(1, finalWidthPt, finalHeightPt));
+      finalWidthMm = finalWidthPt * (25.4 / 72.0);
+      finalHeightMm = finalHeightPt * (25.4 / 72.0);
+    }
+    const vdcW = Math.max(1, Math.min(32767, Math.round(finalWidthPt * scaleVdcPerPt)));
+    const metricScaleMmPerVdc = finalWidthMm / vdcW;
 
     return {
       widthPt: finalWidthPt,
       heightPt: finalHeightPt,
       widthMm: finalWidthMm,
       heightMm: finalHeightMm,
+      targetWidthPx,
+      targetHeightPx,
       scaleVdcPerPt,
+      metricScaleMmPerVdc,
       primitives,
       textRunCount
     };
@@ -674,6 +694,14 @@
       return b;
     }
 
+    function scaleModeBytes(mmPerVdc) {
+      const b = new Uint8Array(6);
+      const dv = new DataView(b.buffer);
+      dv.setInt16(0, 1, false); // 1 = METRIC scaling mode
+      dv.setFloat32(2, mmPerVdc, false); // IEEE 754 float32: mm per VDC unit
+      return b;
+    }
+
     const mfVer = options.profile === "webcgm_v3" ? 3 : 1;
     // BEGIN METAFILE (Class 0, ID 1)
     emitCommand(0, 1, strBytes(options.title || "CAD_DRAWING"), `BEGMF '${options.title || "CAD_DRAWING"}';`);
@@ -705,8 +733,11 @@
       const vdcH = toVdc(scene.heightPt);
       stats.texts += scene.textRunCount || 0;
 
+      const mmPerVdc = scene.metricScaleMmPerVdc || ((scene.widthMm || (scene.widthPt * 25.4 / 72.0)) / Math.max(1, vdcW));
       // BEGIN PICTURE (Class 0, ID 3)
       emitCommand(0, 3, strBytes(picName), `BEGPIC '${picName}';`);
+      // SCALING MODE (Class 2, ID 1): 1 = Metric, float32 = mm per VDC unit
+      emitCommand(2, 1, scaleModeBytes(mmPerVdc), `  SCALEMODE METRIC, ${mmPerVdc.toFixed(6)};`);
       // COLOR SELECTION MODE (Class 2, ID 2): 1 = Direct RGB
       emitCommand(2, 2, i16Bytes([1]), `  COLRMODE DIRECT;`);
       // LINE WIDTH SPECIFICATION MODE (Class 2, ID 3): 0 = Absolute VDC
@@ -870,7 +901,9 @@
       scaleVdcPerPt = scene.scaleVdcPerPt || Math.min(10, 32000 / Math.max(1, scene.widthPt, scene.heightPt));
       const vdcW = toVdc(scene.widthPt);
       const vdcH = toVdc(scene.heightPt);
+      const mmPerVdc = scene.metricScaleMmPerVdc || ((scene.widthMm || (scene.widthPt * 25.4 / 72.0)) / Math.max(1, vdcW));
       lines.push(`BEGPIC 'PAGE_${idx + 1}';`);
+      lines.push(`  SCALEMODE METRIC, ${mmPerVdc.toFixed(6)};`);
       lines.push(`  COLRMODE DIRECT;`);
       lines.push(`  LINEWIDTHMODE ABS;`);
       lines.push(`  EDGEWIDTHMODE ABS;`);
@@ -988,8 +1021,11 @@
       if (cls === 0 && id === 1) hasBegMf = true;
       else if (cls === 0 && id === 2) hasEndMf = true;
       else if (cls === 0 && id === 3) {
-        curPic = { vdcExtent: [0, 0, 8419, 5953], elements: [] };
+        curPic = { vdcExtent: [0, 0, 8419, 5953], scaleMode: 0, metricScale: 1.0, elements: [] };
         pictures.push(curPic);
+      } else if (cls === 2 && id === 1 && curPic && paramBytes.length >= 6) {
+        curPic.scaleMode = pdv.getInt16(0, false);
+        curPic.metricScale = pdv.getFloat32(2, false);
       } else if (cls === 2 && id === 6 && curPic && paramBytes.length >= 8) {
         curPic.vdcExtent = [
           pdv.getInt16(0, false), pdv.getInt16(2, false),
@@ -1279,6 +1315,8 @@
     selTextMode: document.getElementById("selTextMode"),
     selScope: document.getElementById("selScope"),
     selTolerance: document.getElementById("selTolerance"),
+    inpTargetWidth: document.getElementById("inpTargetWidth"),
+    lblTargetAspect: document.getElementById("lblTargetAspect"),
     statusBadge: document.getElementById("statusBadge"),
     statBytes: document.getElementById("statBytes"),
     statLines: document.getElementById("statLines"),
@@ -1305,6 +1343,8 @@
 
   function getOptions() {
     const [tolStr, colStr] = (els.selTolerance.value || "0.08_color").split("_");
+    const rawTargetW = els.inpTargetWidth ? parseFloat(els.inpTargetWidth.value) : 0;
+    const targetWidthPx = (Number.isFinite(rawTargetW) && rawTargetW > 0) ? rawTargetW : 0;
     return {
       profile: els.selProfile.value,
       mode: els.selMode.value,
@@ -1312,6 +1352,7 @@
       scope: els.selScope.value,
       toleranceMm: parseFloat(tolStr) || 0.08,
       monochrome: colStr === "mono",
+      targetWidthPx,
       title: state.fileName.replace(/\.pdf$/i, "")
     };
   }
@@ -1395,7 +1436,17 @@
     els.statTexts.textContent = binResult.stats.texts.toLocaleString();
     els.statVerts.textContent = binResult.stats.vertices.toLocaleString();
     const vScale = sc.scaleVdcPerPt || 10;
-    els.statExtent.textContent = `${Math.round(sc.widthPt * vScale)} × ${Math.round(sc.heightPt * vScale)} VDC`;
+    const vdcW = Math.round(sc.widthPt * vScale);
+    const vdcH = Math.round(sc.heightPt * vScale);
+    if (opts.targetWidthPx > 0) {
+      const targetW = Math.round(opts.targetWidthPx);
+      const targetH = Math.round(opts.targetWidthPx * (sc.heightPt / sc.widthPt));
+      if (els.lblTargetAspect) els.lblTargetAspect.textContent = `× ${targetH} px`;
+      els.statExtent.textContent = `${vdcW} × ${vdcH} VDC (${targetW}×${targetH} px)`;
+    } else {
+      if (els.lblTargetAspect) els.lblTargetAspect.textContent = `(${Math.round(sc.widthPt)}×${Math.round(sc.heightPt)})`;
+      els.statExtent.textContent = `${vdcW} × ${vdcH} VDC`;
+    }
     els.pageIndicator.textContent = `Page ${state.currentPage} / ${state.numPages}`;
     els.btnPrevPage.disabled = state.currentPage <= 1;
     els.btnNextPage.disabled = state.currentPage >= state.numPages;
@@ -1479,8 +1530,12 @@
   });
 
   [els.selProfile, els.selMode, els.selTextMode, els.selScope, els.selTolerance, els.chkBlueprint, els.chkNodes].forEach(el => {
-    el.addEventListener("change", () => processCurrentPDF());
+    if (el) el.addEventListener("change", () => processCurrentPDF());
   });
+  if (els.inpTargetWidth) {
+    els.inpTargetWidth.addEventListener("change", () => processCurrentPDF());
+    els.inpTargetWidth.addEventListener("input", () => processCurrentPDF());
+  }
 
   els.btnPrevPage.addEventListener("click", () => {
     if (state.currentPage > 1) {
