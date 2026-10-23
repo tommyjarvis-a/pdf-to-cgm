@@ -55,8 +55,27 @@
     ")": [[[3.5,11],[6,8],[6,2],[3.5,-1]]],
     "|": [[[5,-1],[5,11]]],
     "&": [[[9,0],[2,7.5],[2,9],[4,10],[6,9],[6,7.5],[1,3.5],[1,1.5],[3,0],[6.5,0],[9,3.5]]],
-    "=": [[[2,6.5],[8,6.5]],[[2,3.5],[8,3.5]]]
+    "=": [[[2,6.5],[8,6.5]],[[2,3.5],[8,3.5]]],
+    "\"": [[[3.5,10],[3.5,7]],[[6.5,10],[6.5,7]]],
+    "'": [[[5,10],[5,7]]],
+    "?": [[[1.5,8],[3.5,10],[6.5,10],[8.5,8],[8.5,6.5],[5,4.5],[5,2.5]],[[5,0],[5,1]]],
+    "!": [[[5,10],[5,3]],[[5,0],[5,1]]],
+    "§": [[[8,9],[6,10],[3,10],[1.5,8.5],[3,7],[7,5.5],[8.5,4],[7,2.5],[3,4],[1.5,5.5],[3,7]],[[7,5.5],[8.5,4],[7,1],[4,0],[2,1]]],
+    "°": [[[3.5,8.5],[5,10],[6.5,8.5],[5,7],[3.5,8.5]]],
+    "_": [[[1,0],[9,0]]],
+    ";": [[[4.5,6.5],[5.5,6.5],[5.5,7.5],[4.5,7.5],[4.5,6.5]],[[5.5,1.5],[4.5,1.5],[5,0.5],[4,-1.2]]],
+    "%": [[[1.5,0],[8.5,10]],[[2.5,9.5],[1.5,8],[2.5,6.5],[3.5,8],[2.5,9.5]],[[7.5,3.5],[6.5,2],[7.5,0.5],[8.5,2],[7.5,3.5]]],
+    "*": [[[5,2],[5,8]],[[2,3.5],[8,6.5]],[[2,6.5],[8,3.5]]]
   };
+
+  function normalizeCadText(s) {
+    return String(s || "")
+      .replace(/[\u201C\u201D\u201E\u00AB\u00BB]/g, '"')
+      .replace(/[\u2018\u2019\u201A]/g, "'")
+      .replace(/[\u2013\u2014\u2212]/g, "-")
+      .replace(/\u2300/g, "\u00D8")
+      .replace(/\u00A0/g, " ");
+  }
 
   function textToStrokePolylines(str, x, y, fontSizePt, colorRgb, targetWidthPt, angleRad) {
     const out = [];
@@ -435,21 +454,23 @@
         if (pt[1] > y1) y1 = pt[1];
       }
       const bw = x1 - x0, bh = y1 - y0;
-      if (bw <= 120 && bh <= 60 && (bw > 0.1 || bh > 0.1)) {
+      if (p.points.length === 2 && (bw < 0.25 || bh < 0.25) && Math.max(bw, bh) > 9.0) continue;
+      if (bw <= 24 && bh <= 24 && (bw > 0.1 || bh > 0.1)) {
         glyphBoxes.push([x0, y0, x1, y1]);
       }
     }
 
     function hasVectorizedGlyphsInBox(bx0, by0, bx1, by1, refH) {
       let hits = 0;
-      const maxGlyphH = Math.max(18, refH * 2.4);
+      const maxGlyphDim = Math.max(15, refH * 1.65);
       for (let i = 0; i < glyphBoxes.length; i++) {
         const g = glyphBoxes[i];
-        if (g[2] < bx0 || g[0] > bx1 || g[3] < by0 || g[1] > by1) continue;
-        if ((g[3] - g[1]) <= maxGlyphH) {
-          hits++;
-          if (hits >= 2) return true;
-        }
+        const gw = g[2] - g[0], gh = g[3] - g[1];
+        if (gw > maxGlyphDim || gh > maxGlyphDim) continue;
+        const cx = (g[0] + g[2]) * 0.5, cy = (g[1] + g[3]) * 0.5;
+        if (cx < bx0 || cx > bx1 || cy < by0 || cy > by1) continue;
+        hits++;
+        if (hits >= 2) return true;
       }
       return false;
     }
@@ -458,7 +479,7 @@
     if (options.textMode !== "none") {
       const tc = await page.getTextContent();
       for (const item of tc.items) {
-        const str = (item.str || "").trim();
+        const str = normalizeCadText(item.str || "").trim();
         if (!str) continue;
         const rawTr = item.transform || [10, 0, 0, 10, 0, 0];
         const tr = multiplyMatrix(baseCtm, rawTr);
@@ -473,12 +494,14 @@
         if (options.textMode === "auto") {
           if (hasInvisibleTextOp) continue;
           const cosA = Math.cos(angleRad), sinA = Math.sin(angleRad);
-          const ex = tx + runWidth * cosA - capH * sinA;
-          const ey = ty + runWidth * sinA + capH * cosA;
-          const bx0 = Math.min(tx, ex) - 1.5;
-          const by0 = Math.min(ty, ey) - 1.5;
-          const bx1 = Math.max(tx, ex) + 1.5;
-          const by1 = Math.max(ty, ey) + Math.max(capH, 2.0) + 1.5;
+          const c0 = [tx, ty];
+          const c1 = [tx + runWidth * cosA, ty + runWidth * sinA];
+          const c2 = [tx - capH * sinA, ty + capH * cosA];
+          const c3 = [c1[0] - capH * sinA, c1[1] + capH * cosA];
+          const bx0 = Math.min(c0[0], c1[0], c2[0], c3[0]) - 1.5;
+          const by0 = Math.min(c0[1], c1[1], c2[1], c3[1]) - 1.5;
+          const bx1 = Math.max(c0[0], c1[0], c2[0], c3[0]) + 1.5;
+          const by1 = Math.max(c0[1], c1[1], c2[1], c3[1]) + 1.5;
           if (hasVectorizedGlyphsInBox(bx0, by0, bx1, by1, fontSize)) {
             continue;
           }
@@ -495,6 +518,7 @@
             y: ty,
             fontSize,
             widthPt: runWidth,
+            angleRad,
             color: textColor
           });
         } else {
@@ -525,18 +549,29 @@
         }
       }
       if (p.type === "text") {
-        if (p.x < minX) minX = p.x;
-        if (p.x + (p.widthPt || 0) > maxX) maxX = p.x + (p.widthPt || 0);
-        if (p.y < minY) minY = p.y;
-        if (p.y + p.fontSize > maxY) maxY = p.y + p.fontSize;
+        const cosA = Math.cos(p.angleRad || 0), sinA = Math.sin(p.angleRad || 0);
+        const w = p.widthPt || 0, h = (p.fontSize || 9) * 0.72;
+        const corners = [
+          [p.x, p.y],
+          [p.x + w * cosA, p.y + w * sinA],
+          [p.x - h * sinA, p.y + h * cosA],
+          [p.x + w * cosA - h * sinA, p.y + w * sinA + h * cosA]
+        ];
+        for (const c of corners) {
+          if (c[0] < minX) minX = c[0];
+          if (c[0] > maxX) maxX = c[0];
+          if (c[1] < minY) minY = c[1];
+          if (c[1] > maxY) maxY = c[1];
+        }
       }
     }
 
-    const padPt = (minX < -0.5 || minY < -0.5 || maxX > widthPt + 0.5 || maxY > heightPt + 0.5) ? 6.0 : 0.0;
-    const extMinX = (minX < -0.5) ? (minX - padPt) : 0;
-    const extMinY = (minY < -0.5) ? (minY - padPt) : 0;
-    const extMaxX = (maxX > widthPt + 0.5) ? (maxX + padPt) : widthPt;
-    const extMaxY = (maxY > heightPt + 0.5) ? (maxY + padPt) : heightPt;
+    const overflowTol = 12.0;
+    const padPt = (minX < -overflowTol || minY < -overflowTol || maxX > widthPt + overflowTol || maxY > heightPt + overflowTol) ? 6.0 : 0.0;
+    const extMinX = (minX < -overflowTol) ? (minX - padPt) : 0;
+    const extMinY = (minY < -overflowTol) ? (minY - padPt) : 0;
+    const extMaxX = (maxX > widthPt + overflowTol) ? (maxX + padPt) : widthPt;
+    const extMaxY = (maxY > heightPt + overflowTol) ? (maxY + padPt) : heightPt;
 
     if (extMinX !== 0 || extMinY !== 0) {
       const dx = -extMinX, dy = -extMinY;
@@ -615,11 +650,20 @@
     }
 
     function strBytes(s) {
-      const clean = String(s || "").replace(/[^\x20-\x7E]/g, "?");
+      const norm = normalizeCadText(s);
+      let clean = "";
+      for (let i = 0; i < norm.length; i++) {
+        const code = norm.charCodeAt(i);
+        if ((code >= 0x20 && code <= 0x7E) || (code >= 0xA0 && code <= 0xFF)) {
+          clean += norm[i];
+        } else {
+          clean += "?";
+        }
+      }
       const n = Math.min(254, clean.length);
       const b = new Uint8Array(1 + n);
       b[0] = n;
-      for (let i = 0; i < n; i++) b[1 + i] = clean.charCodeAt(i);
+      for (let i = 0; i < n; i++) b[1 + i] = clean.charCodeAt(i) & 0xFF;
       return b;
     }
 
@@ -753,6 +797,14 @@
           // CHARACTER HEIGHT (Class 5, ID 15)
           const ch = Math.max(1, toVdc(p.fontSize * 0.70));
           emitCommand(5, 15, i16Bytes([ch]), `  CHARHEIGHT ${ch};`);
+          // CHARACTER ORIENTATION (Class 5, ID 16): (xUp, yUp, xBase, yBase)
+          const ang = p.angleRad || 0;
+          const oriScale = Math.max(100, ch * 10);
+          const xUp = Math.round(-Math.sin(ang) * oriScale);
+          const yUp = Math.round(Math.cos(ang) * oriScale);
+          const xBase = Math.round(Math.cos(ang) * oriScale);
+          const yBase = Math.round(Math.sin(ang) * oriScale);
+          emitCommand(5, 16, i16Bytes([xUp, yUp, xBase, yBase]), `  CHARORI (${xUp},${yUp}) (${xBase},${yBase});`);
           // TEXT (Class 4, ID 4): point(x,y) + enum(1=final) + string
           const sb = strBytes(p.str);
           const tb = new Uint8Array(6 + sb.length);
@@ -856,9 +908,17 @@
           }
           lines.push(`  POLYBEZIER 2 ${pts.join(" ")};`);
         } else if (p.type === "text") {
+          const ch = Math.max(1, toVdc(p.fontSize * 0.70));
+          const ang = p.angleRad || 0;
+          const oriScale = Math.max(100, ch * 10);
+          const xUp = Math.round(-Math.sin(ang) * oriScale);
+          const yUp = Math.round(Math.cos(ang) * oriScale);
+          const xBase = Math.round(Math.cos(ang) * oriScale);
+          const yBase = Math.round(Math.sin(ang) * oriScale);
           lines.push(`  TEXTCOLR ${p.color.join(" ")};`);
-          lines.push(`  CHARHEIGHT ${Math.max(1, toVdc(p.fontSize * 0.70))};`);
-          const safe = p.str.replace(/'/g, "''");
+          lines.push(`  CHARHEIGHT ${ch};`);
+          lines.push(`  CHARORI ${xUp} ${yUp}, ${xBase} ${yBase};`);
+          const safe = normalizeCadText(p.str).replace(/'/g, "''");
           lines.push(`  TEXT (${toVdc(p.x)},${toVdc(p.y)}) FINAL '${safe}';`);
         }
       }
@@ -887,7 +947,8 @@
       edgeWidth: 10,
       edgeType: 1,
       textColor: [20, 42, 78],
-      charHeight: 90
+      charHeight: 90,
+      charAngle: 0
     };
 
     while (pos + 2 <= bytes.length) {
@@ -944,6 +1005,10 @@
         state.textColor = [paramBytes[0], paramBytes[1], paramBytes[2]];
       } else if (cls === 5 && id === 15 && paramBytes.length >= 2) {
         state.charHeight = pdv.getInt16(0, false);
+      } else if (cls === 5 && id === 16 && paramBytes.length >= 8) {
+        const xBase = pdv.getInt16(4, false);
+        const yBase = pdv.getInt16(6, false);
+        state.charAngle = Math.atan2(yBase, xBase);
       } else if (cls === 5 && id === 23 && paramBytes.length >= 3) {
         state.fillColor = [paramBytes[0], paramBytes[1], paramBytes[2]];
       } else if (cls === 5 && id === 27 && paramBytes.length >= 2) {
@@ -1009,6 +1074,7 @@
           y: ty,
           str,
           charHeight: state.charHeight,
+          angleRad: state.charAngle || 0,
           color: state.textColor.slice()
         });
       } else if (cls === 4 && id === 9 && curPic && paramBytes.length >= 20) {
@@ -1147,12 +1213,18 @@
         ctx.lineWidth = Math.max(0.65, el.lineWidth * sx);
         ctx.stroke();
       } else if (el.type === "text") {
+        ctx.save();
         ctx.setLineDash([]);
         const pt = mapPt([el.x, el.y]);
         const pxSize = Math.max(4, el.charHeight * sy);
         ctx.font = `600 ${pxSize.toFixed(1)}px "Inter", Helvetica, Arial, sans-serif`;
         ctx.fillStyle = cssColor(el.color, false);
-        ctx.fillText(el.str, pt[0], pt[1]);
+        ctx.translate(pt[0], pt[1]);
+        if (el.angleRad) {
+          ctx.rotate(-el.angleRad);
+        }
+        ctx.fillText(el.str, 0, 0);
+        ctx.restore();
       }
     }
     ctx.restore();
