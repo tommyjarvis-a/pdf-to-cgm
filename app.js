@@ -35,7 +35,7 @@
     "X": [[[1,10],[9,0]],[[9,10],[1,0]]],
     "Y": [[[1,10],[5,5],[9,10]],[[5,5],[5,0]]],
     "Z": [[[1,10],[9,10],[1,0],[9,0]]],
-    "0": [[[3,10],[7,10],[9,8],[9,2],[7,0],[3,0],[1,2],[1,8],[3,10]],[[2,2],[8,8]]],
+    "0": [[[3,10],[7,10],[9,8],[9,2],[7,0],[3,0],[1,2],[1,8],[3,10]]],
     "1": [[[2.5,8],[5,10],[5,0]],[[2,0],[8,0]]],
     "2": [[[1,8],[3,10],[7,10],[9,8],[9,6],[1,0],[9,0]]],
     "3": [[[1,8.5],[3,10],[7,10],[9,8.5],[9,6.5],[6,5],[9,3.5],[9,1.5],[7,0],[3,0],[1,1.5]]],
@@ -1216,8 +1216,8 @@
         ctx.save();
         ctx.setLineDash([]);
         const pt = mapPt([el.x, el.y]);
-        const pxSize = Math.max(4, el.charHeight * sy);
-        ctx.font = `600 ${pxSize.toFixed(1)}px "Inter", Helvetica, Arial, sans-serif`;
+        const pxSize = Math.max(4, (el.charHeight / 0.70) * sy);
+        ctx.font = `400 ${pxSize.toFixed(1)}px Helvetica, Arial, "Inter", sans-serif`;
         ctx.fillStyle = cssColor(el.color, false);
         ctx.translate(pt[0], pt[1]);
         if (el.angleRad) {
