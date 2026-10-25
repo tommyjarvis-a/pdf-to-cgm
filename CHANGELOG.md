@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.2 — 2026-10-25
+- Fix (Designer): Simple mode menus (Export dropdown) didn't respond in Safari on macOS because clicked buttons don't take focus there; the menus now ignore focus loss during a press inside the menu. Thanks to Designer for the fix.
+
 ## 1.4.1 — 2026-10-25
 - Simple mode copy updates (Designer): Hybrid hint now describes the bitmap fallback; removed the stale 'Text-to-Path' inspector note.
 

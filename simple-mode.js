@@ -213,8 +213,15 @@
       }
     });
     pop.addEventListener('keydown', (ev) => popKeys(ev, pop));
+    // Safari (macOS) never focuses a clicked button, so pressing a menu item moves focus to <body>
+    // and fires focusout before the click lands. Ignore focus loss while a pointer is down in the popover.
+    let ptrInside = false;
+    pop.addEventListener('pointerdown', () => { ptrInside = true; }, true);
+    document.addEventListener('pointerup', () => { if (ptrInside) setTimeout(() => { ptrInside = false; }, 0); }, true);
+    document.addEventListener('pointercancel', () => { ptrInside = false; }, true);
     pop.addEventListener('focusout', () => {
       setTimeout(() => {
+        if (ptrInside) return;
         if (openPop && openPop.pop === pop && !pop.contains(document.activeElement) &&
             document.activeElement !== trigger && document.hasFocus()) closePop(false);
       }, 0);
