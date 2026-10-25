@@ -102,7 +102,7 @@
       all: 'Every page, one CGM picture per page.' } },
     { key: 'mode', label: 'Convert drawing as', group: 'main', hints: {
       vector: 'Sharp lines and text that stay editable in CAD.',
-      hybrid: 'In this version the output is identical to Vector Paths + Text.',
+      hybrid: 'Vectors and text, plus images and gradients as bitmaps in place. Bigger files.',
       raster: 'One bitmap of the whole page (not editable). For scans and shaded art.' } },
     { key: 'textMode', label: 'Text', group: 'more', hints: {
       auto: 'Keep each text once; skip it where it is already drawn as lines.',
@@ -515,8 +515,6 @@
     ui.docList = h('dl', { class: 'sm-dl' });
     sec('Document', true).append(ui.docList);
     ui.secInspector = sec('CGM inspector', false);
-    ui.inspNote = h('p', { class: 'sm-note' },
-      'In CAD Import Compatibility Notes, \u2018Text-to-Path (CAD Vector Outlines)\u2019 is the Text setting \u2018Force Stroke Text (1:1 Source Size)\u2019.');
 
     // ---------- About / which settings dialog (names match the Simple labels and original option text)
     const optText = (key, val) => { const o = find(key); const op = o && [...o.options].find((x) => x.value === val); return op ? op.text : val; };
@@ -805,12 +803,10 @@
       ui.switchSlot.appendChild(ui.modeSwitch);
       moveInto(find('statPills'), ui.secStats);
       moveInto(find('inspector'), ui.secInspector);
-      ui.secInspector.appendChild(ui.inspNote);
       syncDoc(); syncStatus(); syncPage(); syncSettings(); syncView(); syncZoom(); syncSheetTop();
     } else {
       toggleSheet(ui.infoSheet, false, false);
       ui.dropVeil.hidden = true;
-      ui.inspNote.remove();
       restoreAll();
       document.body.classList.remove('sm-simple', 'sm-sheet-open');
       delete document.body.dataset.smView;

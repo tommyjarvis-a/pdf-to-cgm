@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.1 — 2026-10-25
+- Simple mode copy updates (Designer): Hybrid hint now describes the bitmap fallback; removed the stale 'Text-to-Path' inspector note.
+
 ## 1.4.0 — 2026-10-25
 
 ### Added
