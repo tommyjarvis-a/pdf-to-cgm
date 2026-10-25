@@ -253,11 +253,51 @@
       fillColor: [235, 242, 250],
       lineWidth: 1.0,
       dash: [],
-      textRenderingMode: 0
+      textRenderingMode: 0,
+      clipBox: null
     };
     const stack = [];
     let pendingSubpaths = [];
     let hasInvisibleTextOp = false;
+
+    // Hybrid (Vector + Raster Fallback): content that has no vector equivalent in CGM
+    // (embedded raster images, image masks, smooth shadings) is dropped by the pure
+    // vector mode. In hybrid mode each such region becomes a CELLARRAY sampled from a
+    // PDF.js render of the page, emitted in paint order between the vector primitives.
+    const hybrid = options.mode === "hybrid";
+    const rasterFallbacks = [];
+    const IMAGE_OPS = new Set([
+      OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject,
+      OPS.paintSolidColorImageMask, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObjectRepeat,
+      OPS.paintImageMaskXObjectGroup, OPS.paintInlineImageXObjectGroup
+    ].filter((v) => v !== undefined));
+    const REPEAT_OPS = new Set([
+      OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObjectRepeat,
+      OPS.paintImageMaskXObjectGroup, OPS.paintInlineImageXObjectGroup
+    ].filter((v) => v !== undefined));
+    function boxOfPoints(pts) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const pt of pts) {
+        if (pt[0] < x0) x0 = pt[0];
+        if (pt[0] > x1) x1 = pt[0];
+        if (pt[1] < y0) y0 = pt[1];
+        if (pt[1] > y1) y1 = pt[1];
+      }
+      return [x0, y0, x1, y1];
+    }
+    function intersectBox(a, b) {
+      if (!a) return b ? b.slice() : null;
+      if (!b) return a.slice();
+      return [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+    }
+    function addRasterFallback(box) {
+      let r = intersectBox(box, state.clipBox);
+      r = intersectBox(r, [0, 0, widthPt, heightPt]);
+      if (!r || !(r[2] - r[0] >= 1) || !(r[3] - r[1] >= 1)) return;
+      const prim = { type: "cellarray", x0: r[0], y0: r[1], x1: r[2], y1: r[3], nx: 0, ny: 0, rgb: null, rasterFallback: true };
+      primitives.push(prim);
+      rasterFallbacks.push(prim);
+    }
 
     for (let i = 0; i < opList.fnArray.length; i++) {
       const fn = opList.fnArray[i];
@@ -270,7 +310,8 @@
           fillColor: state.fillColor.slice(),
           lineWidth: state.lineWidth,
           dash: state.dash.slice(),
-          textRenderingMode: state.textRenderingMode
+          textRenderingMode: state.textRenderingMode,
+          clipBox: state.clipBox ? state.clipBox.slice() : null
         });
       } else if (fn === OPS.restore) {
         if (stack.length) state = stack.pop();
@@ -281,7 +322,8 @@
           fillColor: state.fillColor.slice(),
           lineWidth: state.lineWidth,
           dash: state.dash.slice(),
-          textRenderingMode: state.textRenderingMode
+          textRenderingMode: state.textRenderingMode,
+          clipBox: state.clipBox ? state.clipBox.slice() : null
         });
         if (args && Array.isArray(args[0]) && args[0].length === 6) {
           state.ctm = multiplyMatrix(state.ctm, args[0]);
@@ -440,6 +482,66 @@
         pendingSubpaths = [];
       } else if (fn === OPS.endPath) {
         pendingSubpaths = [];
+      } else if (hybrid && (fn === OPS.clip || fn === OPS.eoClip)) {
+        const pts = [];
+        for (const sp of pendingSubpaths) for (const pt of sp.points) pts.push(pt);
+        if (pts.length) state.clipBox = intersectBox(state.clipBox, boxOfPoints(pts));
+      } else if (hybrid && IMAGE_OPS.has(fn)) {
+        if (REPEAT_OPS.has(fn)) {
+          // repeated / grouped images: no single unit square, fall back to the clip (or page)
+          addRasterFallback(state.clipBox || [0, 0, widthPt, heightPt]);
+        } else {
+          const m = state.ctm;
+          addRasterFallback(boxOfPoints([applyMatrix(m, 0, 0), applyMatrix(m, 1, 0), applyMatrix(m, 0, 1), applyMatrix(m, 1, 1)]));
+        }
+      } else if (hybrid && fn === OPS.shadingFill) {
+        // 'sh' paints the whole current clip region
+        addRasterFallback(state.clipBox || [0, 0, widthPt, heightPt]);
+      }
+    }
+
+    if (rasterFallbacks.length) {
+      // Render the page once (~150 dpi, capped) and sample each fallback region into a CELLARRAY.
+      const dens = Math.min(150 / 72, 2400 / Math.max(1, widthPt, heightPt));
+      const rvp = page.getViewport({ scale: dens });
+      const rc = document.createElement("canvas");
+      rc.width = Math.max(1, Math.round(rvp.width));
+      rc.height = Math.max(1, Math.round(rvp.height));
+      const rctx = rc.getContext("2d");
+      rctx.fillStyle = "#ffffff";
+      rctx.fillRect(0, 0, rc.width, rc.height);
+      await page.render({ canvasContext: rctx, viewport: rvp }).promise;
+      const MAX_CELLS = 512;
+      for (const fb of rasterFallbacks) {
+        const wPt = fb.x1 - fb.x0, hPt = fb.y1 - fb.y0;
+        let nx = Math.max(2, Math.round(wPt * dens));
+        let ny = Math.max(2, Math.round(hPt * dens));
+        const k = Math.min(1, MAX_CELLS / Math.max(nx, ny));
+        nx = Math.max(2, Math.round(nx * k));
+        ny = Math.max(2, Math.round(ny * k));
+        if (nx % 2) nx++; // even nx keeps every packed RGB row on a 16-bit word boundary
+        const tmp = document.createElement("canvas");
+        tmp.width = nx;
+        tmp.height = ny;
+        const tctx = tmp.getContext("2d");
+        tctx.fillStyle = "#ffffff";
+        tctx.fillRect(0, 0, nx, ny);
+        tctx.drawImage(rc, fb.x0 * dens, (heightPt - fb.y1) * dens, wPt * dens, hPt * dens, 0, 0, nx, ny);
+        const imgData = tctx.getImageData(0, 0, nx, ny).data;
+        const rgbCells = new Uint8Array(nx * ny * 3);
+        for (let row = 0; row < ny; row++) {
+          const srcRow = ny - 1 - row; // CGM rows run bottom-up
+          for (let col = 0; col < nx; col++) {
+            const si = (srcRow * nx + col) * 4;
+            const di = (row * nx + col) * 3;
+            rgbCells[di] = imgData[si];
+            rgbCells[di + 1] = imgData[si + 1];
+            rgbCells[di + 2] = imgData[si + 2];
+          }
+        }
+        fb.nx = nx;
+        fb.ny = ny;
+        fb.rgb = rgbCells;
       }
     }
 
@@ -587,6 +689,10 @@
         if (p.type === "text") {
           p.x += dx;
           p.y += dy;
+        }
+        if (p.type === "cellarray") {
+          p.x0 += dx; p.x1 += dx;
+          p.y0 += dy; p.y1 += dy;
         }
       }
     }
@@ -858,7 +964,7 @@
           pay.set(hdr16, 0);
           pay.set(p.rgb, hdr16.length);
           stats.vertices += 4;
-          emitCommand(4, 9, pay, `  CELLARRAY (0,0) (${vdcW},${vdcH}) ${p.nx}x${p.ny} DIRECT RGB;`);
+          emitCommand(4, 9, pay, `  CELLARRAY (${toVdc(p.x0)},${toVdc(p.y0)}) (${toVdc(p.x1)},${toVdc(p.y1)}) ${p.nx}x${p.ny} DIRECT RGB${p.rasterFallback ? " (HYBRID RASTER FALLBACK)" : ""};`);
         }
       }
 
@@ -953,6 +1059,17 @@
           lines.push(`  CHARORI ${xUp} ${yUp}, ${xBase} ${yBase};`);
           const safe = normalizeCadText(p.str).replace(/'/g, "''");
           lines.push(`  TEXT (${toVdc(p.x)},${toVdc(p.y)}) FINAL '${safe}';`);
+        } else if (p.type === "cellarray" && p.rgb) {
+          // ISO 8632-4 CELLARRAY P Q R nx ny localcolrprec, then direct RGB cells row by row (bottom row first)
+          lines.push(`  CELLARRAY (${toVdc(p.x0)},${toVdc(p.y0)}) (${toVdc(p.x1)},${toVdc(p.y1)}) (${toVdc(p.x1)},${toVdc(p.y0)}) ${p.nx} ${p.ny} 255`);
+          for (let r = 0; r < p.ny; r++) {
+            const cells = [];
+            for (let c = 0; c < p.nx; c++) {
+              const i = (r * p.nx + c) * 3;
+              cells.push(`${p.rgb[i]} ${p.rgb[i + 1]} ${p.rgb[i + 2]}`);
+            }
+            lines.push(`    ${cells.join(", ")}${r === p.ny - 1 ? ";" : ","}`);
+          }
         }
       }
       lines.push(`ENDPIC;`);
@@ -1189,14 +1306,15 @@
           for (let c = 0; c < el.nx; c++) {
             const si = (r * el.nx + c) * 3;
             const di = (dstRow * el.nx + c) * 4;
-            idata.data[di] = el.rgb[si] || 255;
-            idata.data[di + 1] = el.rgb[si + 1] || 255;
-            idata.data[di + 2] = el.rgb[si + 2] || 255;
+            idata.data[di] = el.rgb[si] !== undefined ? el.rgb[si] : 255;
+            idata.data[di + 1] = el.rgb[si + 1] !== undefined ? el.rgb[si + 1] : 255;
+            idata.data[di + 2] = el.rgb[si + 2] !== undefined ? el.rgb[si + 2] : 255;
             idata.data[di + 3] = 255;
           }
         }
         tctx.putImageData(idata, 0, 0);
-        ctx.drawImage(tmp, 0, 0, cw, ch);
+        const a = mapPt([el.x0, el.y0]), b = mapPt([el.x1, el.y1]);
+        ctx.drawImage(tmp, Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]));
       } else if (el.type === "polygon" && el.points.length >= 3) {
         ctx.beginPath();
         const p0 = mapPt(el.points[0]);
@@ -1359,6 +1477,7 @@
 
   let renderBusy = false;
   let renderQueued = false;
+  let lastConvertedWidth = null; // #inpTargetWidth value used by the latest conversion
   async function processCurrentPDF() {
     if (!state.pdfDoc) return;
     if (renderBusy) {
@@ -1378,6 +1497,7 @@
   }
   async function _processCurrentPDFImpl() {
     if (!state.pdfDoc) return;
+    if (els.inpTargetWidth) lastConvertedWidth = els.inpTargetWidth.value;
     const opts = getOptions();
     const page = await state.pdfDoc.getPage(state.currentPage);
     const vp1 = page.getViewport({ scale: 1.0 });
@@ -1456,6 +1576,7 @@
       els.statusBadge.className = "pill pill-ok";
     } else {
       els.statusBadge.textContent = `▲ CHECK ENCODING`;
+      els.statusBadge.className = "pill pill-warn";
     }
 
     updateInspector();
@@ -1470,10 +1591,11 @@
     } else {
       els.inspectorContent.textContent = [
         "ISO/IEC 8632 CGM CAD & Technical Illustration Compatibility Summary:",
-        "  • Siemens NX (File → Import → CGM): Select 'Siemens NX / CAD (Binary v1 Polylines)' + 'Text-to-Path (CAD Vector Outlines)'.",
+        "  • Siemens NX (File → Import → CGM): Select 'Siemens NX / CAD (Binary v1 Polylines)' + Text Handling 'Force Stroke Text (1:1 Source Size)'.",
         "    This flattens cubic Beziers and text glyphs into 16-bit Integer VDC POLYLINE & POLYGON primitives for 100% geometric fidelity.",
-        "  • Arbortext IsoDraw / CorelDESIGNER / S1000D IETM: Select 'WebCGM 2.0 / S1000D (Binary v3 Bezier)' + 'Native CGM TEXT'.",
+        "  • Arbortext IsoDraw / CorelDESIGNER / S1000D IETM: Select 'WebCGM 2.0 / S1000D (Binary v3 Bezier)' + Text Handling 'Native CGM TEXT (1:1 Source Size)'.",
         "  • Human Inspection / Legacy Plotters: Select 'ISO 8632-4 Clear Text (ASCII)' or click 'Download Clear-Text (.cgm)'.",
+        "  • PDFs with Embedded Photos / Gradients: Geometry Mode 'Hybrid (Vector + Raster Fallback)' keeps vectors and adds CELLARRAY bitmaps only for images and shadings.",
         "  • Complex Shaded / Scanned PDFs: Switch Geometry Mode to 'Full Page Raster (CELLARRAY Bitmap)'."
       ].join("\n");
     }
@@ -1533,8 +1655,19 @@
     if (el) el.addEventListener("change", () => processCurrentPDF());
   });
   if (els.inpTargetWidth) {
-    els.inpTargetWidth.addEventListener("change", () => processCurrentPDF());
-    els.inpTargetWidth.addEventListener("input", () => processCurrentPDF());
+    // Typing fires 'input' per keystroke and 'change' on commit: debounce the former and
+    // convert once per distinct value, so one edit triggers exactly one conversion.
+    let widthTimer = null;
+    const flushWidth = () => {
+      clearTimeout(widthTimer);
+      widthTimer = null;
+      if (els.inpTargetWidth.value !== lastConvertedWidth) processCurrentPDF();
+    };
+    els.inpTargetWidth.addEventListener("input", () => {
+      clearTimeout(widthTimer);
+      widthTimer = setTimeout(flushWidth, 350);
+    });
+    els.inpTargetWidth.addEventListener("change", flushWidth);
   }
 
   els.btnPrevPage.addEventListener("click", () => {
@@ -1556,6 +1689,22 @@
       loadPdfBytes(raw, "sample-cad-drawing.pdf");
     }
   });
+
+  // The primary download saves the encoding chosen in CGM Profile / Target, so its label says which.
+  function updateDownloadLabel() {
+    const btn = els.btnDownloadBinary;
+    if (!btn) return;
+    const span = btn.querySelector("span") || btn;
+    if (els.selProfile.value === "cleartext") {
+      span.textContent = "⬇ Download Clear-Text .CGM";
+      btn.title = "Download ISO/IEC 8632-4 Clear-Text ASCII CGM (selected CGM Profile / Target)";
+    } else {
+      span.textContent = "⬇ Download Binary .CGM";
+      btn.title = "Download ISO/IEC 8632-3 Binary CGM for Siemens NX / CAD / S1000D";
+    }
+  }
+  els.selProfile.addEventListener("change", updateDownloadLabel);
+  updateDownloadLabel();
 
   els.btnDownloadBinary.addEventListener("click", () => {
     if (!state.lastBinaryBytes) return;
